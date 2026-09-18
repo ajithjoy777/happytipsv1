@@ -1,0 +1,168 @@
+// Happy Tips platform — data model
+// Money is always stored as integer pence/cents to avoid floating point errors.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN     // full access: money, leads, clients, team
+  FINANCE   // transactions, payouts, bank ledger — no team management
+  MARKETING // leads, analytics — no financial data
+  SUPPORT   // clients + onboarding — no financial data
+}
+
+enum PropertyType {
+  HOTEL
+  AIRBNB
+}
+
+enum LeadStage {
+  NEW          // just captured, not yet contacted
+  CONTACTED    // sales conversation started
+  ONBOARDING   // agreed to join — setting up Stripe Connect + QR codes
+  ACTIVE       // fully live, converted to a Client
+  LOST         // did not convert
+}
+
+enum LeadSource {
+  WEBSITE_FORM
+  COLD_OUTREACH
+  REFERRAL
+  EVENT
+  OTHER
+}
+
+enum StripeAccountStatus {
+  NOT_STARTED   // owner hasn't started Stripe onboarding yet
+  PENDING       // Stripe onboarding link sent, not completed
+  ACTIVE        // Stripe Connect account verified, can receive payouts
+  RESTRICTED    // Stripe flagged the account (needs attention)
+}
+
+enum TransactionStatus {
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum PayoutStatus {
+  PAID
+  PENDING
+  FAILED
+}
+
+enum LedgerEntryType {
+  FEE_REVENUE       // our £10 cut from a guest tip
+  STRIPE_PAYOUT_IN  // Stripe pays our accumulated fees into our real bank account
+  CASH_OUT          // an expense / withdrawal from the business bank account
+  MANUAL_ADJUSTMENT // correction entered by an admin
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      Role     @default(SUPPORT)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  assignedLeads Lead[] @relation("AssignedLeads")
+}
+
+model Lead {
+  id             String       @id @default(cuid())
+  businessName   String
+  propertyType   PropertyType
+  contactName    String
+  email          String
+  phone          String?
+  stage          LeadStage    @default(NEW)
+  source         LeadSource   @default(OTHER)
+  estMonthlyTips Int?         // owner's estimate, in pence, optional
+  notes          String?
+  assignedTo     User?        @relation("AssignedLeads", fields: [assignedToId], references: [id])
+  assignedToId   String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  client Client? // set once the lead converts into a live client
+}
+
+model Client {
+  id               String              @id @default(cuid())
+  name             String
+  slug             String              @unique // used for the public /tip/[slug] page + QR code
+  propertyType     PropertyType
+  address          String?
+  contactName      String
+  email            String
+  phone            String?
+  staffCount       Int                 @default(1)
+  platformFeePence Int                 @default(1000) // flat £10 fee per tip transaction
+  stripeAccountId  String?             // mock acct_xxx — would be a real Stripe Connect account id
+  stripeStatus     StripeAccountStatus @default(NOT_STARTED)
+  joinedAt         DateTime            @default(now())
+
+  lead   Lead?  @relation(fields: [leadId], references: [id])
+  leadId String? @unique
+
+  transactions Transaction[]
+  payouts      ClientPayout[]
+}
+
+model Transaction {
+  id                    String            @id @default(cuid())
+  client                Client            @relation(fields: [clientId], references: [id])
+  clientId              String
+  guestName             String?
+  amountPence           Int               // gross tip amount from the guest
+  platformFeePence      Int               // our cut, copied from Client.platformFeePence at time of payment
+  netAmountPence        Int               // amountPence - platformFeePence, sent to the client's Stripe account
+  currency              String            @default("GBP")
+  stripePaymentIntentId String            // mock pi_xxx
+  status                TransactionStatus @default(SUCCEEDED)
+  createdAt             DateTime          @default(now())
+
+  payout   ClientPayout? @relation(fields: [payoutId], references: [id])
+  payoutId String?
+}
+
+model ClientPayout {
+  id               String       @id @default(cuid())
+  client           Client       @relation(fields: [clientId], references: [id])
+  clientId         String
+  amountPence      Int          // total net amount transferred to the owner in this payout batch
+  stripeTransferId String       // mock tr_xxx
+  status           PayoutStatus @default(PAID)
+  createdAt        DateTime     @default(now())
+
+  transactions Transaction[]
+}
+
+// The platform's own operating bank account — our £10-per-tip revenue,
+// Stripe's payouts of that revenue into our real bank, and our own cash out.
+model PlatformLedgerEntry {
+  id          String          @id @default(cuid())
+  type        LedgerEntryType
+  amountPence Int             // positive = cash in, negative = cash out
+  description String
+  createdAt   DateTime        @default(now())
+}
+
+// Simple daily website traffic + funnel numbers for the analytics page.
+model DailyTraffic {
+  id             String   @id @default(cuid())
+  date           DateTime @unique
+  visitors       Int
+  leadFormViews  Int
+  leadsCaptured  Int
+  tipPageViews   Int
+  tipsCompleted  Int
+}
