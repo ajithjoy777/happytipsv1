@@ -28,17 +28,21 @@ export default async function DashboardPage() {
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard
-          label="Tips processed (all time)"
-          value={formatMoney(stats.allTimeGrossPence)}
-          sublabel={`${formatMoney(stats.monthGrossPence)} this month`}
-        />
-        <StatCard
-          label="Platform fee revenue"
-          value={formatMoney(stats.allTimeFeePence)}
-          sublabel={`${formatMoney(stats.monthFeePence)} this month`}
+          label="Monthly recurring revenue"
+          value={formatMoney(stats.mrrPence)}
+          sublabel={`${formatMoney(stats.monthSubRevenuePence)} collected this month`}
           accent
         />
-        <StatCard label="Active clients" value={String(stats.activeClients)} sublabel="Hotels & Airbnbs live" />
+        <StatCard
+          label="Tip volume processed"
+          value={formatMoney(stats.allTimeTipVolumePence)}
+          sublabel={`${formatMoney(stats.monthTipVolumePence)} this month · 100% to properties`}
+        />
+        <StatCard
+          label="Active clients"
+          value={String(stats.activeClients)}
+          sublabel={stats.overdueClients > 0 ? `${stats.overdueClients} overdue on billing` : "All billing current"}
+        />
         <StatCard label="Leads in pipeline" value={String(stats.openLeads)} sublabel="Not yet converted" />
       </div>
 
@@ -60,8 +64,8 @@ export default async function DashboardPage() {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="font-semibold">{formatMoney(t.amountPence)}</p>
-                  <p className="text-xs text-black/40">net {formatMoney(t.netAmountPence)}</p>
+                  <p className="font-semibold">{formatMoney(t.tipAmountPence)}</p>
+                  <p className="text-xs text-black/40">100% to owner</p>
                 </div>
               </div>
             ))}

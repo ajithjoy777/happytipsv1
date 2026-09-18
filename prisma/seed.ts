@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { PrismaClient } from "../app/generated/prisma/client";
+import { computeSubscriptionFeePence, computeTipCheckout } from "../lib/billing";
 
 const prisma = new PrismaClient();
 
@@ -19,12 +20,11 @@ const pick = <T>(arr: T[]) => arr[randInt(0, arr.length - 1)];
 const id = (prefix: string) =>
   `${prefix}_${Array.from({ length: 14 }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[randInt(0, 35)]).join("")}`;
 
-const FLAT_FEE_PENCE = 1000; // £10 platform fee per tip transaction
-
 async function main() {
   console.log("Clearing existing data...");
   await prisma.transaction.deleteMany();
   await prisma.clientPayout.deleteMany();
+  await prisma.subscriptionInvoice.deleteMany();
   await prisma.platformLedgerEntry.deleteMany();
   await prisma.dailyTraffic.deleteMany();
   await prisma.client.deleteMany();
@@ -49,13 +49,13 @@ async function main() {
 
   console.log("Creating leads (CRM pipeline)...");
   const leadDefs = [
-    { businessName: "The Riverside Inn", propertyType: "HOTEL", contactName: "Helen Brooks", email: "helen@riversideinn.co.uk", stage: "NEW", source: "WEBSITE_FORM", assignedTo: marketer, days: 1 },
-    { businessName: "Coastal Breeze Airbnb", propertyType: "AIRBNB", contactName: "Marco Reyes", email: "marco@coastalbreeze.example", stage: "NEW", source: "WEBSITE_FORM", assignedTo: marketer, days: 2 },
-    { businessName: "Maple House B&B", propertyType: "HOTEL", contactName: "Jean Carter", email: "jean@maplehouse.example", stage: "CONTACTED", source: "COLD_OUTREACH", assignedTo: admin, days: 6, notes: "Left a voicemail, following up Thursday." },
-    { businessName: "Skyline Suites", propertyType: "HOTEL", contactName: "David Osei", email: "david@skylinesuites.example", stage: "CONTACTED", source: "REFERRAL", assignedTo: admin, days: 8, notes: "Referred by Lensfield Hotel's GM. Very interested." },
-    { businessName: "Willow Cottage", propertyType: "AIRBNB", contactName: "Freya Lindqvist", email: "freya@willowcottage.example", stage: "ONBOARDING", source: "WEBSITE_FORM", assignedTo: support, days: 12, notes: "Signed agreement. Waiting on Stripe Connect KYC documents." },
-    { businessName: "Harbor View Hotel", propertyType: "HOTEL", contactName: "Michael Chen", email: "michael@harborview.example", stage: "ONBOARDING", source: "EVENT", assignedTo: support, days: 15, notes: "QR table cards ordered, Stripe onboarding link sent." },
-    { businessName: "Old Town Loft", propertyType: "AIRBNB", contactName: "Ines Almeida", email: "ines@oldtownloft.example", stage: "LOST", source: "COLD_OUTREACH", assignedTo: marketer, days: 20, notes: "Went with a competitor's free tip jar app." },
+    { businessName: "The Riverside Inn", propertyType: "HOTEL", contactName: "Helen Brooks", email: "helen@riversideinn.co.uk", stage: "NEW", source: "WEBSITE_FORM", assignedTo: marketer, days: 1, roomCount: 12 },
+    { businessName: "Coastal Breeze Airbnb", propertyType: "AIRBNB", contactName: "Marco Reyes", email: "marco@coastalbreeze.example", stage: "NEW", source: "WEBSITE_FORM", assignedTo: marketer, days: 2, roomCount: 1 },
+    { businessName: "Maple House B&B", propertyType: "HOTEL", contactName: "Jean Carter", email: "jean@maplehouse.example", stage: "CONTACTED", source: "COLD_OUTREACH", assignedTo: admin, days: 6, roomCount: 4, notes: "Left a voicemail, following up Thursday." },
+    { businessName: "Skyline Suites", propertyType: "HOTEL", contactName: "David Osei", email: "david@skylinesuites.example", stage: "CONTACTED", source: "REFERRAL", assignedTo: admin, days: 8, roomCount: 30, notes: "Referred by Lensfield Hotel's GM. Very interested." },
+    { businessName: "Willow Cottage", propertyType: "AIRBNB", contactName: "Freya Lindqvist", email: "freya@willowcottage.example", stage: "ONBOARDING", source: "WEBSITE_FORM", assignedTo: support, days: 12, roomCount: 1, notes: "Signed agreement. Waiting on Stripe Connect KYC documents." },
+    { businessName: "Harbor View Hotel", propertyType: "HOTEL", contactName: "Michael Chen", email: "michael@harborview.example", stage: "ONBOARDING", source: "EVENT", assignedTo: support, days: 15, roomCount: 25, notes: "QR table cards ordered, Stripe onboarding link sent." },
+    { businessName: "Old Town Loft", propertyType: "AIRBNB", contactName: "Ines Almeida", email: "ines@oldtownloft.example", stage: "LOST", source: "COLD_OUTREACH", assignedTo: marketer, days: 20, roomCount: 1, notes: "Went with a competitor's free tip jar app." },
   ] as const;
 
   for (const l of leadDefs) {
@@ -68,6 +68,7 @@ async function main() {
         phone: `+44 7${randInt(100000000, 999999999)}`,
         stage: l.stage,
         source: l.source,
+        roomCount: l.roomCount,
         assignedToId: l.assignedTo.id,
         notes: "notes" in l ? l.notes : null,
         createdAt: new Date(Date.now() - l.days * 86400000),
@@ -77,15 +78,16 @@ async function main() {
 
   console.log("Creating active clients (converted leads + direct signups)...");
   const clientDefs = [
-    { name: "Lensfield Hotel", slug: "lensfield-hotel", propertyType: "HOTEL", staffCount: 18, joinedDays: 90, stripeStatus: "ACTIVE", contactName: "Grace Fielding", email: "gm@lensfieldhotel.example" },
-    { name: "Birchwood Airbnb", slug: "birchwood-airbnb", propertyType: "AIRBNB", staffCount: 2, joinedDays: 60, stripeStatus: "ACTIVE", contactName: "Sam Whitfield", email: "sam@birchwoodstay.example" },
-    { name: "The Grand Oak Hotel", slug: "grand-oak-hotel", propertyType: "HOTEL", staffCount: 34, joinedDays: 45, stripeStatus: "ACTIVE", contactName: "Priya Deshmukh", email: "ops@grandoakhotel.example" },
-    { name: "Meadow Barn Airbnb", slug: "meadow-barn-airbnb", propertyType: "AIRBNB", staffCount: 1, joinedDays: 22, stripeStatus: "ACTIVE", contactName: "Liam O'Connor", email: "liam@meadowbarn.example" },
-    { name: "Portside Hotel", slug: "portside-hotel", propertyType: "HOTEL", staffCount: 26, joinedDays: 10, stripeStatus: "RESTRICTED", contactName: "Nadia Farouk", email: "finance@portsidehotel.example", note: "Stripe flagged an ID document mismatch during KYC — needs the owner to re-upload." },
+    { name: "Lensfield Hotel", slug: "lensfield-hotel", propertyType: "HOTEL", roomCount: 40, staffCount: 18, joinedDays: 90, stripeStatus: "ACTIVE", billingStatus: "ACTIVE", contactName: "Grace Fielding", email: "gm@lensfieldhotel.example" },
+    { name: "Birchwood Airbnb", slug: "birchwood-airbnb", propertyType: "AIRBNB", roomCount: 1, staffCount: 2, joinedDays: 60, stripeStatus: "ACTIVE", billingStatus: "PAST_DUE", contactName: "Sam Whitfield", email: "sam@birchwoodstay.example", note: "Card on file was declined for this month's £10 subscription — tipping page is offline until it's paid." },
+    { name: "The Grand Oak Hotel", slug: "grand-oak-hotel", propertyType: "HOTEL", roomCount: 60, staffCount: 34, joinedDays: 45, stripeStatus: "ACTIVE", billingStatus: "ACTIVE", contactName: "Priya Deshmukh", email: "ops@grandoakhotel.example" },
+    { name: "Meadow Barn Guesthouse", slug: "meadow-barn-airbnb", propertyType: "AIRBNB", roomCount: 3, staffCount: 2, joinedDays: 22, stripeStatus: "ACTIVE", billingStatus: "ACTIVE", contactName: "Liam O'Connor", email: "liam@meadowbarn.example" },
+    { name: "Portside Hotel", slug: "portside-hotel", propertyType: "HOTEL", roomCount: 45, staffCount: 26, joinedDays: 10, stripeStatus: "RESTRICTED", billingStatus: "ACTIVE", contactName: "Nadia Farouk", email: "finance@portsidehotel.example", note: "Stripe flagged an ID document mismatch during KYC — needs the owner to re-upload." },
   ] as const;
 
   const clients = [];
   for (const c of clientDefs) {
+    const subscriptionFeePence = computeSubscriptionFeePence(c.roomCount);
     const client = await prisma.client.create({
       data: {
         name: c.name,
@@ -95,44 +97,83 @@ async function main() {
         email: c.email,
         phone: `+44 7${randInt(100000000, 999999999)}`,
         staffCount: c.staffCount,
-        platformFeePence: FLAT_FEE_PENCE,
+        roomCount: c.roomCount,
+        subscriptionFeePence,
+        billingStatus: c.billingStatus,
+        transactionFeePercent: 0, // off for every early customer — see lib/billing.ts
         stripeAccountId: id("acct"),
         stripeStatus: c.stripeStatus,
         joinedAt: new Date(Date.now() - c.joinedDays * 86400000),
       },
     });
-    clients.push({ ...client, joinedDays: c.joinedDays, note: "note" in c ? c.note : undefined });
+    clients.push({ ...client, joinedDays: c.joinedDays });
   }
 
-  console.log("Generating tip transactions + payouts per client...");
+  console.log("Billing each client's monthly subscription...");
   for (const client of clients) {
-    if (client.stripeStatus !== "ACTIVE") continue; // restricted accounts can't yet receive tips
+    const months = Math.max(1, Math.floor(client.joinedDays / 30));
+    for (let m = 0; m < months; m++) {
+      const periodStart = new Date(Date.now() - (m + 1) * 30 * 86400000);
+      const periodEnd = new Date(Date.now() - m * 30 * 86400000);
+      const isLatest = m === 0;
+      const failed = isLatest && client.billingStatus === "PAST_DUE";
+      await prisma.subscriptionInvoice.create({
+        data: {
+          clientId: client.id,
+          amountPence: client.subscriptionFeePence,
+          periodStart,
+          periodEnd,
+          status: failed ? "FAILED" : "PAID",
+          stripeInvoiceId: id("in"),
+          createdAt: periodEnd,
+        },
+      });
+      if (!failed) {
+        await prisma.platformLedgerEntry.create({
+          data: {
+            type: "SUBSCRIPTION_REVENUE",
+            amountPence: client.subscriptionFeePence,
+            description: `Monthly subscription — ${client.name} (${client.roomCount} room${client.roomCount > 1 ? "s" : ""})`,
+            createdAt: periodEnd,
+          },
+        });
+      }
+    }
+  }
+
+  console.log("Generating tip transactions + payouts per client (100% passthrough to owner)...");
+  for (const client of clients) {
+    if (client.stripeStatus !== "ACTIVE" || client.billingStatus !== "ACTIVE") continue; // offline until Stripe + billing are both sorted
 
     const txCount = randInt(30, 90);
     const transactions = [];
     for (let i = 0; i < txCount; i++) {
       const daysAgo = randInt(0, Math.min(client.joinedDays, 60));
-      const gross = randInt(15, 120) * 100; // £15–£120 tips, in pence
-      const fee = FLAT_FEE_PENCE;
-      const net = gross - fee;
+      const tipAmountPence = randInt(5, 40) * 100; // £5–£40 tips
+      const checkout = computeTipCheckout(tipAmountPence, client.transactionFeePercent);
       transactions.push({
         clientId: client.id,
         guestName: pick(["A guest", "Room 204", "J. Whitmore", "K. Adeyemi", "Anonymous", "M. Santos", "Front desk visitor", "L. Bergström"]),
-        amountPence: gross,
-        platformFeePence: fee,
-        netAmountPence: net,
+        tipAmountPence: checkout.tipAmountPence,
+        stripeFeePence: checkout.stripeFeePence,
+        platformFeePence: checkout.platformFeePence,
+        totalChargedPence: checkout.totalChargedPence,
+        netAmountPence: checkout.tipAmountPence, // owner always gets the full tip
         stripePaymentIntentId: id("pi"),
         status: "SUCCEEDED" as const,
         createdAt: new Date(Date.now() - daysAgo * 86400000 - randInt(0, 86399) * 1000),
       });
     }
-    // A couple of realistic edge cases
+    // A realistic edge case
+    const refundCheckout = computeTipCheckout(3000, client.transactionFeePercent);
     transactions.push({
       clientId: client.id,
       guestName: "Refunded — duplicate charge",
-      amountPence: 3000,
-      platformFeePence: FLAT_FEE_PENCE,
-      netAmountPence: 2000,
+      tipAmountPence: refundCheckout.tipAmountPence,
+      stripeFeePence: refundCheckout.stripeFeePence,
+      platformFeePence: refundCheckout.platformFeePence,
+      totalChargedPence: refundCheckout.totalChargedPence,
+      netAmountPence: refundCheckout.tipAmountPence,
       stripePaymentIntentId: id("pi"),
       status: "REFUNDED" as const,
       createdAt: new Date(Date.now() - randInt(1, 10) * 86400000),
@@ -140,25 +181,11 @@ async function main() {
 
     await prisma.transaction.createMany({ data: transactions });
 
-    for (const t of await prisma.platformLedgerEntry.findMany()) void t; // no-op keeps types warm
-
-    // Ledger: record our fee revenue as it's earned
-    await prisma.platformLedgerEntry.createMany({
-      data: transactions
-        .filter((t) => t.status === "SUCCEEDED")
-        .map((t) => ({
-          type: "FEE_REVENUE" as const,
-          amountPence: t.platformFeePence,
-          description: `£10 platform fee — ${client.name} tip`,
-          createdAt: t.createdAt,
-        })),
-    });
-
     // Group succeeded, unrefunded transactions into weekly payout batches
-    const succeeded = (await prisma.transaction.findMany({
+    const succeeded = await prisma.transaction.findMany({
       where: { clientId: client.id, status: "SUCCEEDED", payoutId: null },
       orderBy: { createdAt: "asc" },
-    }));
+    });
 
     const weekMs = 7 * 86400000;
     const batches = new Map<number, typeof succeeded>();
@@ -169,11 +196,11 @@ async function main() {
     }
     const sortedBuckets = [...batches.keys()].sort((a, b) => a - b);
     // Leave the most recent bucket un-paid-out yet, to show a "pending" state
-    const buckedsToPay = sortedBuckets.slice(0, -1);
-    for (const bucket of buckedsToPay) {
+    const bucketsToPay = sortedBuckets.slice(0, -1);
+    for (const bucket of bucketsToPay) {
       const txs = batches.get(bucket)!;
       const amount = txs.reduce((sum, t) => sum + t.netAmountPence, 0);
-      const payout = await prisma.clientPayout.create({
+      await prisma.clientPayout.create({
         data: {
           clientId: client.id,
           amountPence: amount,
@@ -183,28 +210,27 @@ async function main() {
           transactions: { connect: txs.map((t) => ({ id: t.id })) },
         },
       });
-      void payout;
     }
   }
 
-  console.log("Recording Stripe payouts of our fee revenue into the business bank account...");
-  const feeEntries = await prisma.platformLedgerEntry.findMany({
-    where: { type: "FEE_REVENUE" },
+  console.log("Recording Stripe payouts of our subscription revenue into the business bank account...");
+  const revenueEntries = await prisma.platformLedgerEntry.findMany({
+    where: { type: { in: ["SUBSCRIPTION_REVENUE", "FEE_REVENUE"] } },
     orderBy: { createdAt: "asc" },
   });
   const biweekMs = 14 * 86400000;
-  const feeBuckets = new Map<number, number>();
-  for (const e of feeEntries) {
+  const revenueBuckets = new Map<number, number>();
+  for (const e of revenueEntries) {
     const bucket = Math.floor(e.createdAt.getTime() / biweekMs);
-    feeBuckets.set(bucket, (feeBuckets.get(bucket) ?? 0) + e.amountPence);
+    revenueBuckets.set(bucket, (revenueBuckets.get(bucket) ?? 0) + e.amountPence);
   }
-  const sortedFeeBuckets = [...feeBuckets.keys()].sort((a, b) => a - b).slice(0, -1); // leave latest un-swept
-  for (const bucket of sortedFeeBuckets) {
+  const sortedRevenueBuckets = [...revenueBuckets.keys()].sort((a, b) => a - b).slice(0, -1); // leave latest un-swept
+  for (const bucket of sortedRevenueBuckets) {
     await prisma.platformLedgerEntry.create({
       data: {
         type: "STRIPE_PAYOUT_IN",
-        amountPence: feeBuckets.get(bucket)!,
-        description: "Stripe payout of accumulated platform fees to business bank account",
+        amountPence: revenueBuckets.get(bucket)!,
+        description: "Stripe payout of accumulated platform revenue to business bank account",
         createdAt: new Date((bucket + 1) * biweekMs),
       },
     });
@@ -228,6 +254,7 @@ async function main() {
       phone: "+44 7700 900001",
       stage: "ACTIVE",
       source: "WEBSITE_FORM",
+      roomCount: 40,
       assignedToId: admin.id,
       createdAt: new Date(Date.now() - 95 * 86400000),
       notes: "First customer! Converted after a walk-in demo at the front desk.",

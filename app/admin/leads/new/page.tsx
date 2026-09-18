@@ -39,6 +39,17 @@ export default function NewLeadPage() {
           </div>
         </div>
         <div>
+          <label className="text-xs font-semibold text-black/50">Rooms / units</label>
+          <input
+            type="number"
+            name="roomCount"
+            min={1}
+            defaultValue={1}
+            className="mt-1 w-full rounded-lg border border-black/10 p-2.5 text-sm"
+          />
+          <p className="mt-1 text-xs text-black/40">Sets their monthly subscription: £10/room, capped at £50/mo.</p>
+        </div>
+        <div>
           <label className="text-xs font-semibold text-black/50">Contact name *</label>
           <input name="contactName" required className="mt-1 w-full rounded-lg border border-black/10 p-2.5 text-sm" />
         </div>

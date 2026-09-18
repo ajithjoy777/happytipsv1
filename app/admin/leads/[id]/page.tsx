@@ -3,7 +3,8 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/Badge";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatMoney } from "@/lib/format";
+import { computeSubscriptionFeePence } from "@/lib/billing";
 import { advanceLeadStage, convertLeadToClient, markLeadLost, updateLeadNotes } from "../actions";
 
 export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -57,6 +58,12 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           <div>
             <dt className="text-black/40">Source</dt>
             <dd className="font-semibold">{lead.source.replaceAll("_", " ")}</dd>
+          </div>
+          <div>
+            <dt className="text-black/40">Rooms / units</dt>
+            <dd className="font-semibold">
+              {lead.roomCount} <span className="text-black/40">→ {formatMoney(computeSubscriptionFeePence(lead.roomCount))}/mo</span>
+            </dd>
           </div>
           <div>
             <dt className="text-black/40">Assigned to</dt>

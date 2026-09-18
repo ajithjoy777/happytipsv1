@@ -59,10 +59,23 @@ enum PayoutStatus {
 }
 
 enum LedgerEntryType {
-  FEE_REVENUE       // our £10 cut from a guest tip
-  STRIPE_PAYOUT_IN  // Stripe pays our accumulated fees into our real bank account
-  CASH_OUT          // an expense / withdrawal from the business bank account
-  MANUAL_ADJUSTMENT // correction entered by an admin
+  SUBSCRIPTION_REVENUE // a property's monthly platform subscription payment
+  FEE_REVENUE          // optional % cut of a guest tip — off by default, see Client.transactionFeePercent
+  STRIPE_PAYOUT_IN     // Stripe pays our accumulated revenue into our real bank account
+  CASH_OUT             // an expense / withdrawal from the business bank account
+  MANUAL_ADJUSTMENT    // correction entered by an admin
+}
+
+enum BillingStatus {
+  ACTIVE     // subscription paid up, tipping page is live
+  PAST_DUE   // payment failed — tipping page goes offline until resolved
+  CANCELED   // owner cancelled — no longer a paying client
+}
+
+enum InvoiceStatus {
+  PAID
+  PENDING
+  FAILED
 }
 
 model User {
@@ -85,6 +98,7 @@ model Lead {
   phone          String?
   stage          LeadStage    @default(NEW)
   source         LeadSource   @default(OTHER)
+  roomCount      Int          @default(1) // drives the monthly subscription price once converted
   estMonthlyTips Int?         // owner's estimate, in pence, optional
   notes          String?
   assignedTo     User?        @relation("AssignedLeads", fields: [assignedToId], references: [id])
@@ -96,35 +110,52 @@ model Lead {
 }
 
 model Client {
-  id               String              @id @default(cuid())
-  name             String
-  slug             String              @unique // used for the public /tip/[slug] page + QR code
-  propertyType     PropertyType
-  address          String?
-  contactName      String
-  email            String
-  phone            String?
-  staffCount       Int                 @default(1)
-  platformFeePence Int                 @default(1000) // flat £10 fee per tip transaction
-  stripeAccountId  String?             // mock acct_xxx — would be a real Stripe Connect account id
-  stripeStatus     StripeAccountStatus @default(NOT_STARTED)
-  joinedAt         DateTime            @default(now())
+  id           String              @id @default(cuid())
+  name         String
+  slug         String              @unique // used for the public /tip/[slug] page + QR code
+  propertyType PropertyType
+  address      String?
+  contactName  String
+  email        String
+  phone        String?
+  staffCount   Int                 @default(1)
+
+  // Primary revenue: a monthly platform subscription, priced by property size.
+  // £10 per room, capped at £50/month — see lib/billing.ts for the one rule that computes this.
+  roomCount            Int            @default(1)
+  subscriptionFeePence Int            @default(1000)
+  billingStatus        BillingStatus  @default(ACTIVE)
+
+  // Optional secondary revenue: a % cut of each guest tip. Off (0) for early
+  // customers while the subscription-only model is being proven — toggle
+  // per client from the client detail page once you're ready to turn it on.
+  transactionFeePercent Int @default(0)
+
+  stripeAccountId String?             // mock acct_xxx — would be a real Stripe Connect account id
+  stripeStatus    StripeAccountStatus @default(NOT_STARTED)
+  joinedAt        DateTime            @default(now())
 
   lead   Lead?  @relation(fields: [leadId], references: [id])
   leadId String? @unique
 
-  transactions Transaction[]
-  payouts      ClientPayout[]
+  transactions        Transaction[]
+  payouts             ClientPayout[]
+  subscriptionInvoices SubscriptionInvoice[]
 }
 
+// The property always receives 100% of the guest's chosen tip. Any fees —
+// Stripe's real card-processing cost, and our own optional % cut — are
+// added ON TOP and charged to the guest, never deducted from the tip.
 model Transaction {
   id                    String            @id @default(cuid())
   client                Client            @relation(fields: [clientId], references: [id])
   clientId              String
   guestName             String?
-  amountPence           Int               // gross tip amount from the guest
-  platformFeePence      Int               // our cut, copied from Client.platformFeePence at time of payment
-  netAmountPence        Int               // amountPence - platformFeePence, sent to the client's Stripe account
+  tipAmountPence        Int               // what the guest chose to tip — 100% of this goes to the property
+  stripeFeePence        Int               // real card-processing cost, added on top, paid to Stripe (not our revenue)
+  platformFeePence      Int               // our optional % cut, added on top — 0 while Client.transactionFeePercent is off
+  totalChargedPence     Int               // tipAmountPence + stripeFeePence + platformFeePence — what hits the guest's card
+  netAmountPence        Int               // amount sent to the client's Stripe Connect account — always equals tipAmountPence
   currency              String            @default("GBP")
   stripePaymentIntentId String            // mock pi_xxx
   status                TransactionStatus @default(SUCCEEDED)
@@ -146,8 +177,24 @@ model ClientPayout {
   transactions Transaction[]
 }
 
-// The platform's own operating bank account — our £10-per-tip revenue,
-// Stripe's payouts of that revenue into our real bank, and our own cash out.
+// A monthly subscription charge to a property owner — separate from Stripe
+// Connect (which only moves guest tips). In production this is a Stripe
+// Billing invoice charged to a card on file, not the Connect account.
+model SubscriptionInvoice {
+  id              String        @id @default(cuid())
+  client          Client        @relation(fields: [clientId], references: [id])
+  clientId        String
+  amountPence     Int
+  periodStart     DateTime
+  periodEnd       DateTime
+  status          InvoiceStatus @default(PAID)
+  stripeInvoiceId String        // mock in_xxx
+  createdAt       DateTime      @default(now())
+}
+
+// The platform's own operating bank account — subscription revenue,
+// any optional per-tip fee revenue, Stripe's payouts of that revenue into
+// our real bank, and our own cash out.
 model PlatformLedgerEntry {
   id          String          @id @default(cuid())
   type        LedgerEntryType

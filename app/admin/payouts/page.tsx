@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getPayoutsData } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
@@ -5,14 +6,16 @@ import { Badge } from "@/components/Badge";
 import { formatDateTime, formatMoney } from "@/lib/format";
 
 const ledgerLabel: Record<string, string> = {
-  FEE_REVENUE: "Fee revenue (£10/tip)",
+  SUBSCRIPTION_REVENUE: "Subscription revenue",
+  FEE_REVENUE: "Per-tip fee revenue",
   STRIPE_PAYOUT_IN: "Stripe payout → bank",
   CASH_OUT: "Cash out",
   MANUAL_ADJUSTMENT: "Manual adjustment",
 };
 
 const ledgerTone = {
-  FEE_REVENUE: "lime",
+  SUBSCRIPTION_REVENUE: "lime",
+  FEE_REVENUE: "olive",
   STRIPE_PAYOUT_IN: "olive",
   CASH_OUT: "red",
   MANUAL_ADJUSTMENT: "amber",
@@ -21,7 +24,7 @@ const ledgerTone = {
 export const dynamic = "force-dynamic";
 
 export default async function PayoutsPage() {
-  const { ledger, clientPayouts, bankBalancePence, pendingFeeInStripe } = await getPayoutsData();
+  const { ledger, clientPayouts, overdueInvoices, bankBalancePence, pendingRevenueInStripe } = await getPayoutsData();
 
   const totalClientPayouts = clientPayouts.reduce((s, p) => s + p.amountPence, 0);
 
@@ -29,23 +32,43 @@ export default async function PayoutsPage() {
     <div>
       <PageHeader
         title="Payouts & bank"
-        description="Your business bank account, plus every payout sent to hotel & Airbnb owners."
+        description="Your business bank account (subscription revenue), plus every tip payout sent to hotel & Airbnb owners."
       />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
         <StatCard
           label="Business bank balance"
           value={formatMoney(bankBalancePence)}
-          sublabel="Fee revenue + payouts − cash out"
+          sublabel="Subscription revenue − cash out"
           accent
         />
         <StatCard
           label="Sitting in Stripe (not yet swept)"
-          value={formatMoney(pendingFeeInStripe)}
-          sublabel="Our fee share from unpaid-out tips"
+          value={formatMoney(pendingRevenueInStripe)}
+          sublabel="Revenue collected, not yet in your bank"
         />
-        <StatCard label="Total sent to owners" value={formatMoney(totalClientPayouts)} sublabel="All-time, via Stripe Connect" />
+        <StatCard
+          label="Total tips paid to owners"
+          value={formatMoney(totalClientPayouts)}
+          sublabel="All-time, 100% via Stripe Connect"
+        />
       </div>
+
+      {overdueInvoices.length > 0 && (
+        <div className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">
+          <p className="font-semibold">{overdueInvoices.length} subscription payment(s) overdue</p>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {overdueInvoices.map((inv) => (
+              <li key={inv.id}>
+                <Link href={`/admin/clients/${inv.client.slug}`} className="underline">
+                  {inv.client.name}
+                </Link>{" "}
+                — {formatMoney(inv.amountPence)}, tipping page is offline until resolved
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="rounded-2xl border border-black/10 bg-white p-5">
@@ -70,7 +93,7 @@ export default async function PayoutsPage() {
         <div className="rounded-2xl border border-black/10 bg-white p-5">
           <h2 className="mb-3 font-bold">Client payouts</h2>
           <p className="mb-3 text-xs text-black/50">
-            Automatic Stripe Connect transfers of net tips to each owner&apos;s bank account.
+            Automatic Stripe Connect transfers of the full tip amount to each owner&apos;s bank account.
           </p>
           <div className="max-h-[520px] divide-y divide-black/5 overflow-y-auto">
             {clientPayouts.map((p) => (

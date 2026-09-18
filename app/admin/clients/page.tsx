@@ -2,21 +2,23 @@ import Link from "next/link";
 import { getClients } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/Badge";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatMoney } from "@/lib/format";
 
-const statusTone = {
+const stripeStatusTone = {
   NOT_STARTED: "neutral",
   PENDING: "amber",
   ACTIVE: "lime",
   RESTRICTED: "red",
 } as const;
 
-const statusLabel: Record<string, string> = {
+const stripeStatusLabel: Record<string, string> = {
   NOT_STARTED: "Stripe not started",
   PENDING: "Stripe onboarding pending",
-  ACTIVE: "Live",
+  ACTIVE: "Payouts live",
   RESTRICTED: "Needs attention",
 };
+
+const billingTone = { ACTIVE: "lime", PAST_DUE: "red", CANCELED: "neutral" } as const;
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,7 @@ export default async function ClientsPage() {
     <div>
       <PageHeader
         title="Clients"
-        description="Hotels & Airbnbs live on the platform, collecting tips via their QR code."
+        description="Hotels & Airbnbs live on the platform, each paying a monthly subscription (£10/room, capped at £50)."
       />
 
       <div className="overflow-hidden rounded-2xl border border-black/10 bg-white">
@@ -36,9 +38,11 @@ export default async function ClientsPage() {
             <tr>
               <th className="px-4 py-3 font-semibold">Property</th>
               <th className="px-4 py-3 font-semibold">Type</th>
-              <th className="px-4 py-3 font-semibold">Staff</th>
-              <th className="px-4 py-3 font-semibold">Tips collected</th>
-              <th className="px-4 py-3 font-semibold">Status</th>
+              <th className="px-4 py-3 font-semibold">Rooms</th>
+              <th className="px-4 py-3 font-semibold">Subscription</th>
+              <th className="px-4 py-3 font-semibold">Billing</th>
+              <th className="px-4 py-3 font-semibold">Payouts</th>
+              <th className="px-4 py-3 font-semibold">Tips</th>
               <th className="px-4 py-3 font-semibold">Joined</th>
             </tr>
           </thead>
@@ -52,11 +56,15 @@ export default async function ClientsPage() {
                   <p className="text-xs text-black/40">{c.contactName}</p>
                 </td>
                 <td className="px-4 py-3 text-black/60">{c.propertyType === "HOTEL" ? "Hotel" : "Airbnb"}</td>
-                <td className="px-4 py-3 text-black/60">{c.staffCount}</td>
-                <td className="px-4 py-3 text-black/60">{c._count.transactions} tips</td>
+                <td className="px-4 py-3 text-black/60">{c.roomCount}</td>
+                <td className="px-4 py-3 font-semibold">{formatMoney(c.subscriptionFeePence)}/mo</td>
                 <td className="px-4 py-3">
-                  <Badge tone={statusTone[c.stripeStatus]}>{statusLabel[c.stripeStatus]}</Badge>
+                  <Badge tone={billingTone[c.billingStatus]}>{c.billingStatus.replace("_", " ")}</Badge>
                 </td>
+                <td className="px-4 py-3">
+                  <Badge tone={stripeStatusTone[c.stripeStatus]}>{stripeStatusLabel[c.stripeStatus]}</Badge>
+                </td>
+                <td className="px-4 py-3 text-black/60">{c._count.transactions}</td>
                 <td className="px-4 py-3 text-black/40">{formatDate(c.joinedAt)}</td>
               </tr>
             ))}

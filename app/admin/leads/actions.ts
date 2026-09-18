@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { computeSubscriptionFeePence } from "@/lib/billing";
 
 function slugify(name: string) {
   return name
@@ -54,7 +55,10 @@ export async function convertLeadToClient(leadId: string) {
       email: lead.email,
       phone: lead.phone,
       staffCount: 1,
-      platformFeePence: 1000,
+      roomCount: lead.roomCount,
+      subscriptionFeePence: computeSubscriptionFeePence(lead.roomCount),
+      billingStatus: "ACTIVE",
+      transactionFeePercent: 0,
       stripeAccountId: randomId("acct"),
       stripeStatus: "PENDING",
       leadId: lead.id,
@@ -81,13 +85,14 @@ export async function createLead(formData: FormData) {
     | "EVENT"
     | "OTHER";
   const notes = String(formData.get("notes") ?? "").trim() || null;
+  const roomCount = Math.max(1, Number(formData.get("roomCount")) || 1);
 
   if (!businessName || !contactName || !email) {
     throw new Error("Business name, contact name and email are required.");
   }
 
   await prisma.lead.create({
-    data: { businessName, contactName, email, phone, propertyType, source, notes },
+    data: { businessName, contactName, email, phone, propertyType, source, notes, roomCount },
   });
 
   revalidatePath("/admin/leads");

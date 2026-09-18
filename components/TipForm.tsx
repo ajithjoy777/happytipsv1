@@ -1,18 +1,40 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { submitTip } from "@/app/tip/[slug]/actions";
+import { computeTipCheckout } from "@/lib/billing";
+import { formatMoney } from "@/lib/format";
 
 const PRESETS = [5, 10, 20, 50];
 
-type State = { ok: boolean; error?: string; amountPence?: number } | null;
+type State = {
+  ok: boolean;
+  error?: string;
+  tipAmountPence?: number;
+  platformFeePence?: number;
+  stripeFeePence?: number;
+  totalChargedPence?: number;
+} | null;
 
-export function TipForm({ clientId, clientName }: { clientId: string; clientName: string }) {
+export function TipForm({
+  clientId,
+  clientName,
+  transactionFeePercent,
+}: {
+  clientId: string;
+  clientName: string;
+  transactionFeePercent: number;
+}) {
   const [amount, setAmount] = useState(10);
   const boundAction = submitTip.bind(null, clientId);
   const [state, formAction, pending] = useActionState<State, FormData>(async (_prev, formData) => {
     return boundAction(formData);
   }, null);
+
+  const checkout = useMemo(
+    () => computeTipCheckout(Math.round((Number.isFinite(amount) ? amount : 0) * 100), transactionFeePercent),
+    [amount, transactionFeePercent]
+  );
 
   if (state?.ok) {
     return (
@@ -20,7 +42,7 @@ export function TipForm({ clientId, clientName }: { clientId: string; clientName
         <p className="text-4xl">🎉</p>
         <h2 className="mt-3 text-xl font-black">Thank you!</h2>
         <p className="mt-1 text-sm">
-          Your £{((state.amountPence ?? 0) / 100).toFixed(2)} tip has been sent to the team at {clientName}.
+          Your {formatMoney(state.tipAmountPence ?? 0)} tip has been sent — in full — to the team at {clientName}.
         </p>
       </div>
     );
@@ -66,13 +88,34 @@ export function TipForm({ clientId, clientName }: { clientId: string; clientName
         />
       </div>
 
+      <div className="space-y-1 rounded-lg bg-white/5 p-3 text-xs text-brand-cream/70">
+        <div className="flex justify-between">
+          <span>Tip to {clientName} (100%)</span>
+          <span>{formatMoney(checkout.tipAmountPence)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Card processing</span>
+          <span>{formatMoney(checkout.stripeFeePence)}</span>
+        </div>
+        {checkout.platformFeePence > 0 && (
+          <div className="flex justify-between">
+            <span>Platform fee</span>
+            <span>{formatMoney(checkout.platformFeePence)}</span>
+          </div>
+        )}
+        <div className="mt-1 flex justify-between border-t border-white/10 pt-1 font-bold text-brand-cream">
+          <span>Total charged</span>
+          <span>{formatMoney(checkout.totalChargedPence)}</span>
+        </div>
+      </div>
+
       {state?.error && <p className="text-sm font-medium text-red-400">{state.error}</p>}
 
       <button
         disabled={pending}
         className="w-full rounded-lg bg-brand-lime py-3 text-sm font-black text-brand-black disabled:opacity-60"
       >
-        {pending ? "Processing…" : `Tip £${amount.toFixed(2)} with card`}
+        {pending ? "Processing…" : `Pay ${formatMoney(checkout.totalChargedPence)}`}
       </button>
       <p className="text-center text-[11px] text-brand-cream/40">
         Payments processed securely by Stripe. Demo mode — no real card is charged.

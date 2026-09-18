@@ -11,28 +11,35 @@ export async function getDashboardStats() {
   const monthStart = startOfMonth();
 
   const [
-    allTimeGross,
-    allTimeFee,
-    monthGross,
-    monthFee,
+    allTimeTipVolume,
+    monthTipVolume,
+    allTimeSubRevenue,
+    monthSubRevenue,
+    mrrClients,
     activeClients,
+    overdueClients,
     openLeads,
     pendingPayoutAmount,
     recentTransactions,
     recentLeads,
     traffic,
   ] = await Promise.all([
-    prisma.transaction.aggregate({ where: { status: "SUCCEEDED" }, _sum: { amountPence: true } }),
-    prisma.transaction.aggregate({ where: { status: "SUCCEEDED" }, _sum: { platformFeePence: true } }),
+    prisma.transaction.aggregate({ where: { status: "SUCCEEDED" }, _sum: { tipAmountPence: true } }),
     prisma.transaction.aggregate({
       where: { status: "SUCCEEDED", createdAt: { gte: monthStart } },
+      _sum: { tipAmountPence: true },
+    }),
+    prisma.platformLedgerEntry.aggregate({
+      where: { type: { in: ["SUBSCRIPTION_REVENUE", "FEE_REVENUE"] } },
       _sum: { amountPence: true },
     }),
-    prisma.transaction.aggregate({
-      where: { status: "SUCCEEDED", createdAt: { gte: monthStart } },
-      _sum: { platformFeePence: true },
+    prisma.platformLedgerEntry.aggregate({
+      where: { type: { in: ["SUBSCRIPTION_REVENUE", "FEE_REVENUE"] }, createdAt: { gte: monthStart } },
+      _sum: { amountPence: true },
     }),
+    prisma.client.findMany({ where: { billingStatus: "ACTIVE" }, select: { subscriptionFeePence: true } }),
     prisma.client.count({ where: { stripeStatus: "ACTIVE" } }),
+    prisma.client.count({ where: { billingStatus: "PAST_DUE" } }),
     prisma.lead.count({ where: { stage: { notIn: ["ACTIVE", "LOST"] } } }),
     prisma.transaction.aggregate({
       where: { status: "SUCCEEDED", payoutId: null },
@@ -48,11 +55,13 @@ export async function getDashboardStats() {
   ]);
 
   return {
-    allTimeGrossPence: allTimeGross._sum.amountPence ?? 0,
-    allTimeFeePence: allTimeFee._sum.platformFeePence ?? 0,
-    monthGrossPence: monthGross._sum.amountPence ?? 0,
-    monthFeePence: monthFee._sum.platformFeePence ?? 0,
+    allTimeTipVolumePence: allTimeTipVolume._sum.tipAmountPence ?? 0,
+    monthTipVolumePence: monthTipVolume._sum.tipAmountPence ?? 0,
+    allTimeSubRevenuePence: allTimeSubRevenue._sum.amountPence ?? 0,
+    monthSubRevenuePence: monthSubRevenue._sum.amountPence ?? 0,
+    mrrPence: mrrClients.reduce((sum, c) => sum + c.subscriptionFeePence, 0),
     activeClients,
+    overdueClients,
     openLeads,
     pendingPayoutPence: pendingPayoutAmount._sum.netAmountPence ?? 0,
     recentTransactions,
@@ -87,22 +96,23 @@ export async function getClientBySlug(slug: string) {
     include: {
       transactions: { orderBy: { createdAt: "desc" }, take: 25 },
       payouts: { orderBy: { createdAt: "desc" }, take: 10 },
+      subscriptionInvoices: { orderBy: { createdAt: "desc" }, take: 12 },
       lead: true,
     },
   });
 }
 
 export async function getClientTotals(clientId: string) {
-  const [gross, fee, net, txCount] = await Promise.all([
-    prisma.transaction.aggregate({ where: { clientId, status: "SUCCEEDED" }, _sum: { amountPence: true } }),
-    prisma.transaction.aggregate({ where: { clientId, status: "SUCCEEDED" }, _sum: { platformFeePence: true } }),
+  const [tips, net, subRevenue, txCount] = await Promise.all([
+    prisma.transaction.aggregate({ where: { clientId, status: "SUCCEEDED" }, _sum: { tipAmountPence: true } }),
     prisma.transaction.aggregate({ where: { clientId, status: "SUCCEEDED" }, _sum: { netAmountPence: true } }),
+    prisma.subscriptionInvoice.aggregate({ where: { clientId, status: "PAID" }, _sum: { amountPence: true } }),
     prisma.transaction.count({ where: { clientId, status: "SUCCEEDED" } }),
   ]);
   return {
-    grossPence: gross._sum.amountPence ?? 0,
-    feePence: fee._sum.platformFeePence ?? 0,
+    tipVolumePence: tips._sum.tipAmountPence ?? 0,
     netPence: net._sum.netAmountPence ?? 0,
+    subscriptionPaidPence: subRevenue._sum.amountPence ?? 0,
     txCount,
   };
 }
@@ -116,7 +126,7 @@ export async function getTransactions() {
 }
 
 export async function getPayoutsData() {
-  const [ledger, clientPayouts, balance] = await Promise.all([
+  const [ledger, clientPayouts, balance, overdueInvoices] = await Promise.all([
     prisma.platformLedgerEntry.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
     prisma.clientPayout.findMany({
       orderBy: { createdAt: "desc" },
@@ -124,24 +134,26 @@ export async function getPayoutsData() {
       take: 100,
     }),
     prisma.platformLedgerEntry.aggregate({ _sum: { amountPence: true } }),
+    prisma.subscriptionInvoice.findMany({
+      where: { status: "FAILED" },
+      orderBy: { createdAt: "desc" },
+      include: { client: true },
+    }),
   ]);
 
-  const stripeBalance = await prisma.transaction.aggregate({
-    where: { status: "SUCCEEDED", payoutId: null },
-    _sum: { platformFeePence: true },
-  });
+  const revenueIn = ledger
+    .filter((l) => l.type === "SUBSCRIPTION_REVENUE" || l.type === "FEE_REVENUE")
+    .reduce((sum, l) => sum + l.amountPence, 0);
+  const sweptToBank = ledger
+    .filter((l) => l.type === "STRIPE_PAYOUT_IN")
+    .reduce((sum, l) => sum + l.amountPence, 0);
 
   return {
     ledger,
     clientPayouts,
+    overdueInvoices,
     bankBalancePence: balance._sum.amountPence ?? 0,
-    unswept: ledger
-      .filter((l) => l.type === "FEE_REVENUE")
-      .reduce((sum, l) => sum + l.amountPence, 0) -
-      ledger
-        .filter((l) => l.type === "STRIPE_PAYOUT_IN")
-        .reduce((sum, l) => sum + l.amountPence, 0),
-    pendingFeeInStripe: stripeBalance._sum.platformFeePence ?? 0,
+    pendingRevenueInStripe: revenueIn - sweptToBank,
   };
 }
 

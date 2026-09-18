@@ -22,11 +22,11 @@ export default async function TipPage({ params }: { params: Promise<{ slug: stri
           </p>
         </div>
 
-        {client.stripeStatus === "ACTIVE" ? (
-          <TipForm clientId={client.id} clientName={client.name} />
+        {client.stripeStatus === "ACTIVE" && client.billingStatus === "ACTIVE" ? (
+          <TipForm clientId={client.id} clientName={client.name} transactionFeePercent={client.transactionFeePercent} />
         ) : (
           <div className="rounded-2xl bg-white/5 p-6 text-center text-sm text-brand-cream/70">
-            This property hasn&apos;t finished setting up payments yet. Please check back soon.
+            This property&apos;s tipping page is temporarily unavailable. Please check back soon.
           </div>
         )}
 
